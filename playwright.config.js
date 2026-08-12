@@ -25,7 +25,7 @@ module.exports = defineConfig({
   reporter: [
     process.env.CI ? ['github'] : ['list'],
     process.env.CI ? ['blob'] : ['html', { open: 'never' }],
-    process.env.QTEST_ENABLED ? ['./src/reporters/qTestReporter.ts'] : [''],
+    process.env.QTEST_ENABLED ? ['./src/reporters/qTestReporter.ts'] : ['null'],
   ],
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
