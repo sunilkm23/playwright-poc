@@ -85,3 +85,14 @@ jobs:
         with:
           name: html-report-final
           path: playwright-report
+      
+      - name: Send Status Back to Power Automate
+        if: always() # Ensures this step runs even if the previous step fails
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{
+              "status": "${{ job.status }}",
+              "workflow_run_id": "${{ github.run_id }}",
+              "message": "GitHub Actions run finished with status: ${{ job.status }}"
+            }' \
+            ${{ secrets.POWER_AUTOMATE_WEBHOOK_URL }}
