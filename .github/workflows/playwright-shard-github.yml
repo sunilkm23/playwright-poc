@@ -3,6 +3,8 @@ name: Playwright Shard Tests GitHub Machines
 on:
   # Allow manual triggering of the workflow
   workflow_dispatch:
+  repository_dispatch:
+    types: [execute_playwright_test]
 
 jobs:
   test:
