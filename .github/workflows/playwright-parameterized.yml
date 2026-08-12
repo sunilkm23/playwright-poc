@@ -1,0 +1,326 @@
+name: Playwright Parameterized Workflow
+
+# -----------------------------------------------------------------------------
+# Manual workflow to execute Playwright tests on Azure Playwright Testing Service.
+#
+# Features
+# • Execute against multiple environments
+# • Run complete suites or individual test files
+# • Select browser/API project
+# • Configure parallel workers
+# • Upload results to qTest
+# • Publish Playwright HTML Report
+# • Upload report to SharePoint
+# -----------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: >
+          Target application environment.
+        required: true
+        type: choice
+        default: dev
+        options:
+          - dev
+          - sit
+          - uat
+          - prod
+
+      test_files_or_folders:
+        description: "Test file, folder, or name pattern. Required if Test suite tag is blank."
+        required: false
+        type: string
+        default: ""
+
+      test_suite_tag:
+        description: "Suite tag without @, for example Regression. Required if Test files or folders is blank."
+        required: false
+        type: string
+        default: ""
+
+      qtest_cycle_id:
+        description: "Optional. Enter a cycle ID to upload results to qTest."
+        required: false
+        type: string
+        default: ""
+
+      project:
+        description: >
+          Playwright project/browser to execute.
+          Select 'all' to execute every configured Playwright project.
+        required: false
+        type: choice
+        default: chromium
+        options:
+          - chromium
+          - Microsoft Edge
+          - api
+          - all
+
+      workers:
+        description: >
+          Maximum number of Playwright workers for parallel execution.
+        required: false
+        type: number
+        default: 20
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  validate-inputs:
+    name: Validate test selection
+    runs-on: windows-latest
+    steps:
+      - name: Validate test selection
+        shell: pwsh
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          TEST_PATTERN: ${{ github.event.inputs.test_files_or_folders }}
+          SUITE: ${{ github.event.inputs.test_suite_tag }}
+          PROJECT: ${{ github.event.inputs.project }}
+          WORKERS: ${{ github.event.inputs.workers }}
+          QTEST_CYCLE_ID: ${{ github.event.inputs.qtest_cycle_id }}
+          SP_SITE_HOST_NAME: ${{ vars.SP_SITE_HOST_NAME }}
+          SP_SITE_PATH: ${{ vars.SP_SITE_PATH }}
+          SP_TARGET_FOLDER: ${{ vars.SP_TARGET_FOLDER }}
+        run: |
+          function Format-Value($value) {
+              if ([string]::IsNullOrWhiteSpace($value)) { return "Not provided" }
+              return $value
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TEST_PATTERN) -and [string]::IsNullOrWhiteSpace($env:SUITE)) {
+              Write-Error "Enter Test files or folders, Test suite tag, or both."
+              exit 1
+          }
+
+          $qtestEnabled = -not [string]::IsNullOrWhiteSpace($env:QTEST_CYCLE_ID)
+          $selection = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:TEST_PATTERN)) {
+              $selection += "files or folders matching '$(Format-Value $env:TEST_PATTERN)'"
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:SUITE)) {
+              $selection += "suite tag '@$(Format-Value $env:SUITE)'"
+          }
+
+          Write-Host "======================================================"
+          Write-Host "             Playwright Run Summary"
+          Write-Host "======================================================"
+          Write-Host "Will execute  : $($selection -join ' and ')"
+          Write-Host "Environment   : $(Format-Value $env:ENVIRONMENT)"
+          Write-Host "Project       : $(Format-Value $env:PROJECT)"
+          Write-Host "Workers       : $(Format-Value $env:WORKERS)"
+          Write-Host "qTest Enabled : $qtestEnabled"
+          Write-Host "qTest Cycle ID: $(Format-Value $env:QTEST_CYCLE_ID)"
+          Write-Host "SharePoint Site : $(Format-Value $env:SP_SITE_HOST_NAME)"
+          Write-Host "SharePoint Path : $(Format-Value $env:SP_SITE_PATH)"
+          Write-Host "SharePoint Folder: $(Format-Value $env:SP_TARGET_FOLDER)"
+          Write-Host "======================================================"
+
+  playwright:
+    name: >
+      ${{ github.event.inputs.environment }}
+      |
+      ${{ github.event.inputs.project }}
+      |
+      ${{ github.event.inputs.test_files_or_folders }}
+      |
+      ${{ github.event.inputs.test_suite_tag }}
+    runs-on: windows-latest
+    needs: validate-inputs
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Checkout Source
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Setup Node.js
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # -----------------------------------------------------------------------
+      # Install Dependencies
+      # -----------------------------------------------------------------------
+      - name: Install project dependencies
+        run: npm ci
+
+      # -----------------------------------------------------------------------
+      # Azure Authentication (OIDC)
+      # -----------------------------------------------------------------------
+      - name: Login to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # -----------------------------------------------------------------------
+      # Execute Playwright Tests
+      # -----------------------------------------------------------------------
+      - name: Run Playwright Tests on Azure Playwright Testing Service
+
+        shell: pwsh
+
+        env:
+          # CI
+          CI: true
+
+          # Azure Playwright Service
+          PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
+
+          # Azure Key Vault
+          KEY_VAULT_URL: ${{ secrets.KEY_VAULT_URL }}
+
+          # Workflow Inputs
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          SUITE: ${{ github.event.inputs.test_suite_tag }}
+          TEST_PATTERN: ${{ github.event.inputs.test_files_or_folders }}
+          PROJECT: ${{ github.event.inputs.project }}
+          WORKERS: ${{ github.event.inputs.workers }}
+
+          # qTest Integration
+          QTEST_ENABLED: ${{ github.event.inputs.qtest_cycle_id != '' && 'true' || 'false' }}
+          QTEST_CYCLE_ID: ${{ github.event.inputs.qtest_cycle_id }}
+          QTEST_BASE_URL: ${{ vars.QTEST_BASE_URL }}
+          QTEST_PROJECT_ID: ${{ vars.QTEST_PROJECT_ID }}
+          QTEST_API_TOKEN: ${{ secrets.QTEST_API_TOKEN }}
+
+        run: |
+
+          Write-Host "======================================================"
+          Write-Host "          Playwright Execution Summary"
+          Write-Host "======================================================"
+          Write-Host "Environment   : $env:ENVIRONMENT"
+          Write-Host "Project       : $env:PROJECT"
+          Write-Host "Test Suite Tag: $env:SUITE"
+          Write-Host "Test Selection: $env:TEST_PATTERN"
+          Write-Host "Workers       : $env:WORKERS"
+          Write-Host "qTest Enabled : $env:QTEST_ENABLED"
+          Write-Host "qTest Cycle ID: $env:QTEST_CYCLE_ID"
+          Write-Host "qTest Project : $env:QTEST_PROJECT_ID"
+          Write-Host "Service URL   : $env:PLAYWRIGHT_SERVICE_URL"
+          Write-Host "======================================================"
+          Write-Host ""
+
+          $cmdArguments = @()
+
+          if ($env:TEST_PATTERN) {
+              $cmdArguments += $env:TEST_PATTERN
+          }
+          
+          $cmdArguments += @(
+              "-c"
+              "playwright.service.config.js"
+          )
+          
+          if ($env:PROJECT -and $env:PROJECT -ne "all") {
+              $cmdArguments += "--project=$($env:PROJECT)"
+          }
+          
+          if ($env:WORKERS) {
+              $cmdArguments += "--workers=$($env:WORKERS)"
+          }
+          
+          if ($env:SUITE) {
+              $cmdArguments += "-g"
+              $cmdArguments += "@$($env:SUITE)"
+          }
+          
+          Write-Host "Executing command:"
+          Write-Host "npx playwright test $cmdArguments"
+          Write-Host ""
+          
+          npx playwright test @cmdArguments
+
+      # -----------------------------------------------------------------------
+      # Upload Playwright HTML Report
+      # -----------------------------------------------------------------------
+      - name: Upload Playwright Report
+        if: always()
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 10
+
+      # -----------------------------------------------------------------------
+      # Prepare zipped report for SharePoint upload
+      # -----------------------------------------------------------------------
+      - name: Prepare SharePoint report zip
+        if: always()
+        shell: pwsh
+        env:
+          SP_FILE_PATH: playwright-report/
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+          $zipFileName = "playwright-report_$($env:ENVIRONMENT)_Run${{ github.run_number }}_$timestamp.zip"
+          $zipFilePath = Join-Path $PWD $zipFileName
+
+          if (Test-Path $zipFilePath) {
+              Remove-Item $zipFilePath -Force
+          }
+
+          Write-Host "Creating zip archive: $zipFilePath"
+          Compress-Archive -Path (Join-Path $PWD $env:SP_FILE_PATH) -DestinationPath $zipFilePath -Force
+
+          "SP_FILE_PATH=$zipFilePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SP_FILE_NAME=$zipFileName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # -----------------------------------------------------------------------
+      # Upload Playwright Report to SharePoint
+      # -----------------------------------------------------------------------
+      - name: Upload Playwright Report to SharePoint
+        if: always()
+
+        shell: pwsh
+
+        env:
+          # Azure App Registration
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+          # SharePoint Configuration
+          SP_SITE_HOST_NAME: ${{ vars.SP_SITE_HOST_NAME }}
+          SP_SITE_PATH: ${{ vars.SP_SITE_PATH }}
+          SP_TARGET_FOLDER: ${{ vars.SP_TARGET_FOLDER }}
+
+          # Report Location
+          SP_FILE_PATH: ${{ env.SP_FILE_PATH }}
+          SP_FILE_NAME: ${{ env.SP_FILE_NAME }}
+
+          # Environment (used for naming)
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+
+        run: |
+
+          Write-Host "======================================================"
+          Write-Host "        Uploading Playwright Report"
+          Write-Host "======================================================"
+          Write-Host "Report Name : $($env:SP_FILE_NAME)"
+          Write-Host "Report Path : $($env:SP_FILE_PATH)"
+          Write-Host "Target Site : $env:SP_SITE_HOST_NAME"
+          Write-Host "Folder      : $env:SP_TARGET_FOLDER"
+          Write-Host "======================================================"
+          Write-Host ""
+
+          .\.github\sharepoint\upload-sharepoint.ps1
+
+          Write-Host ""
+          if ($webUrl) {
+              Write-Host "SharePoint report location: $webUrl"
+          }
+          Write-Host "Playwright report uploaded successfully."

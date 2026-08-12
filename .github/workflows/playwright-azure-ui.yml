@@ -1,0 +1,63 @@
+name: Playwright UI Tests (Azure Playwright Workspaces)
+
+on:
+  # Allow manual triggering of the workflow
+  workflow_dispatch:
+
+permissions: # Required when using Microsoft Entra ID to authenticate
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Login to Azure with AzPowershell (enableAzPSSession true)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }} # GitHub Open ID connect values copied in previous steps
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # enable-AzPSSession: true
+
+      # - name: Azure CLI script
+      #   uses: azure/cli@v2
+      #   with:
+      #     azcliversion: latest
+      #     inlineScript: |
+      #       az account show
+
+      # - name: Azure PowerShell script
+      #   uses: azure/powershell@v3
+      #   with:
+      #     azPSVersion: "latest"
+      #     inlineScript: |
+      #       Get-AzContext
+      
+      - name: Run Playwright tests on Azure
+        env:
+          CI: true
+          # Regional endpoint for Playwright Workspaces
+          PLAYWRIGHT_SERVICE_URL: ${{ secrets.PLAYWRIGHT_SERVICE_URL }}
+          # PLAYWRIGHT_SERVICE_ACCESS_TOKEN: ${{ secrets.PLAYWRIGHT_SERVICE_ACCESS_TOKEN }} # Not recommended, use Microsoft Entra ID authentication. 
+        run: npx playwright test TestAutomationObstacle --project=chromium -c playwright.service.config.js --workers=20
+      
+      - name: Upload Playwright Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 10

@@ -1,0 +1,32 @@
+const { defineConfig } = require('@playwright/test');
+const { createAzurePlaywrightConfig, ServiceOS, ServiceAuth } = require('@azure/playwright');
+const { DefaultAzureCredential, EnvironmentCredential } = require('@azure/identity');
+const config = require('./playwright.config');
+
+/* Learn more about service configuration at https://aka.ms/pww/docs/config */
+export default defineConfig(
+  config,
+  createAzurePlaywrightConfig(config, {
+    exposeNetwork: '<loopback>',
+    connectTimeout: 3 * 60 * 1000, // 3 minutes
+    os: ServiceOS.LINUX,
+    // serviceAuthType: ServiceAuth.ACCESS_TOKEN,
+    credential: new DefaultAzureCredential(),
+  }),
+  {
+    /*
+    Enable Playwright Workspaces Reporter:
+    Uncomment the reporter section below to upload test results and reports to Playwright Workspaces.
+
+    Note: The HTML reporter must be included before Playwright Workspaces Reporter.
+    This configuration will replace any existing reporter settings from your base config.
+    If you're already using other reporters, add them to this array.
+    */
+    reporter: [
+      process.env.CI ? ['github'] : ['list'],
+      ["html", { open: "never" }],
+      ["@azure/playwright/reporter"],
+      process.env.QTEST_ENABLED ? ['./src/reporters/qTestReporter.ts'] : [''],
+    ],
+  }
+);
