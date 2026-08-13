@@ -31,7 +31,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Run Playwright tests (Shard ${{ matrix.shard }}/4)
-        run: npx playwright test TestAutomationObstacle --project=chromium --shard=${{ matrix.shard }}/4
+        run: npx playwright test ${{ github.event.client_payload.test_keyword }} --project=chromium --shard=${{ matrix.shard }}/4
 
       - name: Upload blob report for shard ${{ matrix.shard }}
         if: always()
